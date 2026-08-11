@@ -47,6 +47,17 @@ class Gh:
     def _restore_ssh_keys(self, account: dict, home: Path) -> None:
         ssh_dir = home / ".ssh"
         ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+        config_file = ssh_dir / "config"
+        if not config_file.exists():
+            config_file.write_text("")
+            config_file.chmod(0o600)
+
+        known_hosts = ssh_dir / "known_hosts"
+        if not known_hosts.exists():
+            known_hosts.write_text("")
+            known_hosts.chmod(0o600)
+
         priv = account.get("ssh_private_key")
         pub = account.get("ssh_public_key")
         priv_path = ssh_dir / SSH_KEY_NAME
@@ -141,6 +152,12 @@ class Gh:
         rc, out = await self.run(account, ["codespace", "stop", "-c", name])
         if rc != 0:
             raise GhError(out or f"Failed to stop codespace {name}")
+
+    async def start_codespace(self, account: dict, name: str) -> None:
+        """Start a codespace via GitHub CLI / API."""
+        rc, out = await self.run(account, ["codespace", "start", "-c", name])
+        if rc != 0:
+            raise GhError(out or f"Failed to start codespace {name}")
 
     async def ssh_exec(
         self, account: dict, name: str, command: str, timeout: int = 300

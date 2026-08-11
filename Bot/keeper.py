@@ -253,6 +253,12 @@ class KeeperManager:
                     # SSH connect boots the codespace if it is stopped and
                     # counts as activity (resets GitHub's idle timer).
                     rc, out = await self.gh.ssh_exec(account, name, PING_COMMAND)
+                    if rc != 0 and not _is_rate_limited(out):
+                        try:
+                            await self.gh.start_codespace(account, name)
+                            rc, out = 0, "api start fallback"
+                        except Exception:
+                            pass
                 except Exception as exc:  # noqa: BLE001 - includes GhError
                     rc, out = 1, str(exc)
                 if rc == 0:
@@ -548,9 +554,20 @@ class KeeperManager:
                             cs_id, reason="keep-alive connect"
                         )
                 else:
-                    failures += 1
-                    await self.db.record_ping(cs_id, False, (out or "ssh failed")[-400:])
-                    log.warning("Keep-alive ping failed for %s: %s", name, (out or "")[-200:])
+                    api_ok = False
+                    try:
+                        await self.gh.start_codespace(account, name)
+                        api_ok = True
+                    except Exception:
+                        pass
+
+                    if api_ok:
+                        failures = 0
+                        await self.db.record_ping(cs_id, True, "ping ok (API fallback)")
+                    else:
+                        failures += 1
+                        await self.db.record_ping(cs_id, False, (out or "ssh failed")[-400:])
+                        log.warning("Keep-alive ping failed for %s: %s", name, (out or "")[-200:])
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep the loop alive
