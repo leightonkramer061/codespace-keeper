@@ -12,11 +12,25 @@ import urllib.request
 log = logging.getLogger("codespace-keeper")
 
 
+def ensure_ssh_config() -> None:
+    """Ensure system /etc/ssh/ssh_config exists if directory is writable."""
+    try:
+        os.makedirs("/etc/ssh", exist_ok=True)
+        config_path = "/etc/ssh/ssh_config"
+        if not os.path.exists(config_path):
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write("Host *\n  SendEnv LANG LC_*\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n")
+            os.chmod(config_path, 0o644)
+    except Exception:
+        pass
+
+
 def ensure_gh_installed() -> str:
     """Ensure GitHub CLI (gh) binary is available on PATH.
     
     If not installed on the system, downloads the official static binary into ./bin/gh.
     """
+    ensure_ssh_config()
     # 1. Check if gh is already on PATH
     gh_path = shutil.which("gh")
     if gh_path:

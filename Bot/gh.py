@@ -162,15 +162,22 @@ class Gh:
                 return
             raise GhError(out or f"Failed to stop codespace {name}")
 
-    async def start_codespace(self, account: dict, name: str) -> None:
-        """Start a codespace via GitHub CLI / API."""
-        rc, out = await self.run(account, ["codespace", "start", "-c", name])
-        if rc != 0:
-            low = (out or "").lower()
-            if "already running" in low or "is already running" in low or "already active" in low:
-                log.info("Codespace %s is already running", name)
-                return
-            raise GhError(out or f"Failed to start codespace {name}")
+    async def start_codespace(self, account: dict, name: str) -> dict:
+        """Start a codespace directly via GitHub REST API."""
+        url = f"https://api.github.com/user/codespaces/{name}/start"
+        headers = {
+            "Authorization": f"Bearer {account['token']}",
+            "Accept": "application/vnd.github+json",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers) as resp:
+                if resp.status in (200, 201, 202, 204):
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+                text = await resp.text()
+                raise GhError(f"API start failed (HTTP {resp.status}): {text[:200]}")
 
     async def ssh_exec(
         self, account: dict, name: str, command: str, timeout: int = 300
@@ -180,12 +187,15 @@ class Gh:
         Connecting via `gh codespace ssh` automatically starts a stopped
         codespace and counts as activity, which resets GitHub's idle timer.
         """
+        ssh_cfg = str(self.account_home(account) / ".ssh" / "config")
         args = [
             "codespace",
             "ssh",
             "-c",
             name,
             "--",
+            "-F",
+            ssh_cfg,
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
