@@ -565,13 +565,16 @@ class KeeperManager:
                     api_ok = False
                     try:
                         await self.gh.start_codespace(account, name)
-                        api_ok = True
-                    except Exception:
-                        pass
+                        new_state = await self.gh.get_codespace_state(account, name)
+                        if new_state in ("Available", "Starting"):
+                            api_ok = True
+                            state = new_state
+                    except Exception as boot_err:
+                        out = f"SSH: {out} | API: {boot_err}"
 
                     if api_ok:
                         failures = 0
-                        await self.db.record_ping(cs_id, True, "ping ok (API fallback)")
+                        await self.db.record_ping(cs_id, True, "ping ok (API start)")
                     else:
                         failures += 1
                         await self.db.record_ping(cs_id, False, (out or "ssh failed")[-400:])

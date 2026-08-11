@@ -167,7 +167,7 @@ class Gh:
         rc, out = await self.run(account, ["codespace", "start", "-c", name])
         if rc != 0:
             low = (out or "").lower()
-            if "already running" in low or "is running" in low or "available" in low:
+            if "already running" in low or "is already running" in low or "already active" in low:
                 log.info("Codespace %s is already running", name)
                 return
             raise GhError(out or f"Failed to start codespace {name}")
