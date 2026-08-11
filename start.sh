@@ -16,13 +16,15 @@ if [ ! -d "venv" ]; then
     $PYTHON_CMD -m venv venv || python -m venv venv
 fi
 
-# 2. Activate virtual environment
-source venv/bin/activate
+# 2. Activate virtual environment (POSIX compatible dot syntax)
+if [ -f "venv/bin/activate" ]; then
+    . venv/bin/activate
+fi
 
-# 3. Upgrade pip & install requirements
+# 3. Install requirements using venv pip directly
 echo "[start.sh] Installing/verifying dependencies from requirements.txt..."
-pip install --no-cache-dir -r requirements.txt
+./venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# 4. Start the bot
+# 4. Start the bot using venv python directly
 echo "[start.sh] Launching bot main.py..."
-exec python main.py
+exec ./venv/bin/python main.py
