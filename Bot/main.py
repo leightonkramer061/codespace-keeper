@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 
@@ -66,6 +67,11 @@ async def post_init(app: Application) -> None:
 
 
 def main() -> None:
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     ensure_gh_installed()
 
     settings = load_settings()

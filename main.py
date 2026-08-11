@@ -10,6 +10,7 @@ Handles:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import subprocess
@@ -63,6 +64,11 @@ def ensure_dependencies() -> None:
 
 
 if __name__ == "__main__":
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     load_env_file()
     ensure_dependencies()
 
