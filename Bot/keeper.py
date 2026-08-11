@@ -542,6 +542,14 @@ class KeeperManager:
                 except Exception:  # noqa: BLE001
                     state = "Unknown"
 
+                # If codespace is Shutdown or Stopped, boot it via GitHub REST API
+                if state in ("Shutdown", "Stopped"):
+                    try:
+                        log.info("Codespace %s is %s. Booting via GitHub API...", name, state)
+                        await self.gh.start_codespace(account, name)
+                    except Exception as boot_err:
+                        log.warning("Could not boot %s via API: %s", name, boot_err)
+
                 rc, out = await self.gh.ssh_exec(account, name, PING_COMMAND)
                 if rc == 0:
                     failures = 0

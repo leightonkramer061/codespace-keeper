@@ -49,9 +49,14 @@ class Gh:
         ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
         config_file = ssh_dir / "config"
-        if not config_file.exists():
-            config_file.write_text("")
-            config_file.chmod(0o600)
+        config_content = (
+            "Host *\n"
+            "  StrictHostKeyChecking no\n"
+            "  UserKnownHostsFile /dev/null\n"
+            "  LogLevel ERROR\n"
+        )
+        config_file.write_text(config_content)
+        config_file.chmod(0o600)
 
         known_hosts = ssh_dir / "known_hosts"
         if not known_hosts.exists():
@@ -62,10 +67,10 @@ class Gh:
         pub = account.get("ssh_public_key")
         priv_path = ssh_dir / SSH_KEY_NAME
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
-        if priv and not priv_path.exists():
+        if priv:
             priv_path.write_text(priv)
             priv_path.chmod(0o600)
-        if pub and not pub_path.exists():
+        if pub:
             pub_path.write_text(pub)
             pub_path.chmod(0o644)
 
