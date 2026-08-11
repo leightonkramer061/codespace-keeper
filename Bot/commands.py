@@ -15,7 +15,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .gh import GhError
-from .handlers import STATE_EMOJI, _ctx, _fmt_ts, _guard, _parse_hhmm
+from .handlers import STATE_EMOJI, _ctx, _fmt_hhmm, _fmt_ts, _guard, _parse_hhmm
 
 log = logging.getLogger(__name__)
 
@@ -478,9 +478,9 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send(
             update,
             "Usage: <code>/schedule &lt;alias&gt; &lt;name&gt; &lt;stop&gt; &lt;start&gt;</code>\n"
-            f"Times are daily, 24h <code>HH:MM</code> in <b>{html.escape(settings.schedule_tz)}</b>.\n"
-            "Example: <code>/schedule work my-codespace 23:30 07:00</code>\n"
-            "Use <code>-</code> to skip one, e.g. <code>/schedule work my-codespace 23:30 -</code>",
+            f"Times are daily in <b>{html.escape(settings.schedule_tz)}</b>.\n"
+            "Example: <code>/schedule work my-codespace 11:30PM 07:00AM</code>\n"
+            "Use <code>-</code> to skip one, e.g. <code>/schedule work my-codespace 11:30PM -</code>",
         )
         return
     account = await _find_account(db, update, args[0])
@@ -495,7 +495,7 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (stop_raw != "-" and stop_t is None) or (start_raw != "-" and start_t is None):
         await _send(
             update,
-            "\u274c Invalid time. Use 24h <code>HH:MM</code>, e.g. <code>23:30</code>.",
+            "\u274c Invalid time. Send e.g. <code>11:30 PM</code> or <code>23:30</code>.",
         )
         return
     if not stop_t and not start_t:
@@ -508,8 +508,8 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send(
         update,
         f"\u23f0 Schedule saved for <code>{html.escape(cs['name'])}</code> ({tz}):\n"
-        f"\U0001f6d1 Stop daily at: <b>{stop_t or 'off'}</b>\n"
-        f"\u25b6\ufe0f Start daily at: <b>{start_t or 'off'}</b>\n"
+        f"\U0001f6d1 Stop daily at: <b>{_fmt_hhmm(stop_t)}</b>\n"
+        f"\u25b6\ufe0f Start daily at: <b>{_fmt_hhmm(start_t)}</b>\n"
         "Keep-alive pauses at stop time and resumes at start time; startup "
         "commands run on every scheduled start.",
     )
@@ -691,10 +691,9 @@ async def cmd_series_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _send(
             update,
             "Usage: <code>/series_schedule &lt;stop&gt; &lt;start&gt;</code>\n"
-            f"Times are daily, 24h <code>HH:MM</code> in "
-            f"<b>{html.escape(settings.schedule_tz)}</b>. "
+            f"Times are daily in <b>{html.escape(settings.schedule_tz)}</b>. "
             "Use <code>-</code> to skip one, e.g. "
-            "<code>/series_schedule 23:30 07:00</code>",
+            "<code>/series_schedule 11:30PM 07:00AM</code>",
         )
         return
     stop_raw, start_raw = args
@@ -703,7 +702,7 @@ async def cmd_series_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE
     if (stop_raw != "-" and stop_t is None) or (start_raw != "-" and start_t is None):
         await _send(
             update,
-            "\u274c Invalid time. Use 24h <code>HH:MM</code>, e.g. <code>23:30</code>.",
+            "\u274c Invalid time. Send e.g. <code>11:30 PM</code> or <code>23:30</code>.",
         )
         return
     if not stop_t and not start_t:
@@ -716,8 +715,8 @@ async def cmd_series_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _send(
         update,
         f"\u23f0 Series schedule saved ({tz}):\n"
-        f"\U0001f6d1 Stop daily at: <b>{stop_t or 'off'}</b>\n"
-        f"\u25b6\ufe0f Start daily at: <b>{start_t or 'off'}</b>\n"
+        f"\U0001f6d1 Stop daily at: <b>{_fmt_hhmm(stop_t)}</b>\n"
+        f"\u25b6\ufe0f Start daily at: <b>{_fmt_hhmm(start_t)}</b>\n"
         "At stop time the series pauses and the active codespace shuts "
         "down; at start time the series resumes from where it left off.",
     )
@@ -761,7 +760,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_ping = cs.get("last_ping")
             if last_ping:
                 ok = "\u2705" if cs.get("last_ok") else "\u274c"
-                when = f"{_fmt_ts(last_ping, settings.schedule_tz, '%H:%M:%S')} {ok}"
+                when = f"{_fmt_ts(last_ping, settings.schedule_tz, '%I:%M:%S %p')} {ok}"
             else:
                 when = "never"
             n_cmds = len(cs.get("startup_commands") or [])

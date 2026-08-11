@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import timezone
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -76,21 +76,48 @@ def _arg(update: Update) -> str:
 
 
 def _parse_hhmm(text: str) -> str | None:
-    """Parse a 24h HH:MM string; returns normalized 'HH:MM' or None."""
-    parts = text.strip().split(":")
-    if len(parts) != 2:
+    """Parse a 12h AM/PM or 24h time string; returns normalized 'HH:MM' or None."""
+    s = text.strip()
+    if not s or s == "-":
         return None
-    try:
-        h, m = int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
-    if not (0 <= h <= 23 and 0 <= m <= 59):
-        return None
-    return f"{h:02d}:{m:02d}"
+
+    # Try 12-hour formats
+    for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p"):
+        try:
+            dt = datetime.strptime(s.upper(), fmt)
+            return dt.strftime("%H:%M")
+        except ValueError:
+            pass
+
+    # Try 24-hour formats
+    parts = s.split(":")
+    if len(parts) == 2:
+        try:
+            h, m = int(parts[0]), int(parts[1])
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return f"{h:02d}:{m:02d}"
+        except ValueError:
+            pass
+    return None
 
 
-def _fmt_ts(dt, tz_name: str, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
-    """Render a stored UTC timestamp in the configured timezone (IST by default)."""
+def _fmt_hhmm(text: str | None) -> str:
+    """Format stored 24h 'HH:MM' string into 12h AM/PM format (e.g. '02:30 PM')."""
+    if not text or text in ("-", "(off)", "off"):
+        return text or "(off)"
+    parts = text.split(":")
+    if len(parts) == 2:
+        try:
+            h, m = int(parts[0]), int(parts[1])
+            t_obj = time(h, m)
+            return t_obj.strftime("%I:%M %p")
+        except ValueError:
+            pass
+    return text
+
+
+def _fmt_ts(dt, tz_name: str, fmt: str = "%Y-%m-%d %I:%M:%S %p") -> str:
+    """Render a stored UTC timestamp in the configured timezone (12h AM/PM by default)."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(ZoneInfo(tz_name)).strftime(f"{fmt} %Z")
@@ -641,12 +668,12 @@ async def cb_cssched(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cs = await db.get_codespace(cs_id)
     if not cs:
         return
-    stop_t = cs.get("schedule_stop") or "(off)"
-    start_t = cs.get("schedule_start") or "(off)"
+    stop_t = _fmt_hhmm(cs.get("schedule_stop"))
+    start_t = _fmt_hhmm(cs.get("schedule_start"))
     tz = html.escape(settings.schedule_tz)
     text = (
         f"\u23f0 <b>Auto start/stop — {html.escape(cs['display_name'])}</b>\n\n"
-        f"Times are daily, 24h <code>HH:MM</code> in <b>{tz}</b>.\n\n"
+        f"Times are daily in <b>{tz}</b>.\n\n"
         f"\U0001f6d1 Stop at: <code>{html.escape(stop_t)}</code>\n"
         f"\u25b6\ufe0f Start at: <code>{html.escape(start_t)}</code>\n\n"
         "At stop time I shut the codespace down and pause keep-alive. At "
@@ -674,9 +701,9 @@ async def cb_csstopt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz = html.escape(settings.schedule_tz)
     text = (
         f"\U0001f6d1 <b>Daily STOP time — {html.escape(cs['display_name'])}</b>\n\n"
-        f"Current: <code>{html.escape(cs.get('schedule_stop') or '(off)')}</code>\n\n"
-        f"Send the time to stop the codespace every day, 24h "
-        f"<code>HH:MM</code> in <b>{tz}</b> (e.g. <code>23:30</code>).\n"
+        f"Current: <code>{html.escape(_fmt_hhmm(cs.get('schedule_stop')))}</code>\n\n"
+        f"Send the time to stop the codespace every day in <b>{tz}</b> "
+        "(e.g. <code>11:30 PM</code> or <code>23:30</code>).\n"
         "Send <code>-</code> to disable auto-stop, or /cancel to keep it."
     )
     await _render(update, text, [[InlineKeyboardButton("\u2b05\ufe0f Back", callback_data=f"cssched:{cs_id}")]])
@@ -697,17 +724,17 @@ async def msg_stop_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         value = _parse_hhmm(raw)
         if value is None:
             await update.message.reply_text(
-                "\u274c Invalid time. Send 24h HH:MM (e.g. 23:30), - to disable, or /cancel."
+                "\u274c Invalid time. Send e.g. 11:30 PM or 23:30, - to disable, or /cancel."
             )
             return ASK_STOP_TIME
     if cs_id == "series":
         await db.save_series({"schedule_stop": value})
     else:
         await db.update_codespace_fields(cs_id, {"schedule_stop": value})
-    saved = value or "disabled"
+    saved = _fmt_hhmm(value) if value else "disabled"
     await update.message.reply_text(
         f"\u2705 Daily stop time: <b>{saved}</b>\n\n"
-        "\u25b6\ufe0f Now send the daily START time (24h <code>HH:MM</code>), "
+        "\u25b6\ufe0f Now send the daily START time (e.g. <code>07:00 AM</code> or <code>07:00</code>), "
         "<code>-</code> to disable auto-start, or /cancel to finish.",
         parse_mode=ParseMode.HTML,
     )
@@ -726,9 +753,9 @@ async def cb_csstartt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz = html.escape(settings.schedule_tz)
     text = (
         f"\u25b6\ufe0f <b>Daily START time — {html.escape(cs['display_name'])}</b>\n\n"
-        f"Current: <code>{html.escape(cs.get('schedule_start') or '(off)')}</code>\n\n"
-        f"Send the time to start the codespace every day, 24h "
-        f"<code>HH:MM</code> in <b>{tz}</b> (e.g. <code>07:00</code>).\n"
+        f"Current: <code>{html.escape(_fmt_hhmm(cs.get('schedule_start')))}</code>\n\n"
+        f"Send the time to start the codespace every day in <b>{tz}</b> "
+        "(e.g. <code>07:00 AM</code> or <code>07:00</code>).\n"
         "Send <code>-</code> to disable auto-start, or /cancel to keep it."
     )
     await _render(update, text, [[InlineKeyboardButton("\u2b05\ufe0f Back", callback_data=f"cssched:{cs_id}")]])
@@ -750,25 +777,25 @@ async def msg_start_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if value is None:
             context.user_data["sched_cs_id"] = cs_id
             await update.message.reply_text(
-                "\u274c Invalid time. Send 24h HH:MM (e.g. 07:00), - to disable, or /cancel."
+                "\u274c Invalid time. Send e.g. 07:00 AM or 07:00, - to disable, or /cancel."
             )
             return ASK_START_TIME
     if cs_id == "series":
         await db.save_series({"schedule_start": value})
         series = await db.get_series()
-        stop_t = series.get("schedule_stop") or "off"
+        stop_t = _fmt_hhmm(series.get("schedule_stop"))
         label = "Series schedule"
         back = InlineKeyboardButton("\u2b05\ufe0f Back to series", callback_data="series")
     else:
         await db.update_codespace_fields(cs_id, {"schedule_start": value})
         cs = await db.get_codespace(cs_id)
-        stop_t = (cs.get("schedule_stop") if cs else None) or "off"
+        stop_t = _fmt_hhmm(cs.get("schedule_stop") if cs else None)
         label = "Schedule"
         back = InlineKeyboardButton("\u2b05\ufe0f Back to codespace", callback_data=f"cs:{cs_id}")
     await update.message.reply_text(
         f"\u23f0 {label} saved ({settings.schedule_tz}):\n"
         f"\U0001f6d1 Stop daily at: <b>{stop_t}</b>\n"
-        f"\u25b6\ufe0f Start daily at: <b>{value or 'off'}</b>",
+        f"\u25b6\ufe0f Start daily at: <b>{_fmt_hhmm(value)}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([[back]]),
     )
@@ -816,7 +843,7 @@ async def _series_text_kb(db, keeper, settings):
     if sched_stop or sched_start:
         lines.append(
             f"\u23f0 Schedule ({html.escape(settings.schedule_tz)}): "
-            f"stop {sched_stop or 'off'} \u2022 start {sched_start or 'off'}"
+            f"stop {_fmt_hhmm(sched_stop)} \u2022 start {_fmt_hhmm(sched_start)}"
         )
     if cs_ids:
         lines.append("Order:")
