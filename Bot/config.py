@@ -34,5 +34,5 @@ def load_settings() -> Settings:
         keepalive_interval=max(30, int(os.getenv("KEEPALIVE_INTERVAL", "300"))),
         watch_interval=max(15, int(os.getenv("WATCH_INTERVAL", "60"))),
         schedule_tz=os.getenv("SCHEDULE_TZ", "Asia/Kolkata").strip() or "Asia/Kolkata",
-        data_dir=os.getenv("DATA_DIR", "/app/data"),
+        data_dir=os.getenv("DATA_DIR", os.path.abspath("./data")),
     )

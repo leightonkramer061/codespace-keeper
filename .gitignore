@@ -1,0 +1,15 @@
+# Virtual environment
+venv/
+.venv/
+
+# Downloaded binaries
+bin/
+
+# Local data & environment variables
+data/
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

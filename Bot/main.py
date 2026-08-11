@@ -12,6 +12,7 @@ from . import commands, handlers
 from .config import load_settings
 from .db import Database
 from .gh import Gh
+from .installer import ensure_gh_installed
 from .keeper import KeeperManager
 
 logging.basicConfig(
@@ -65,11 +66,7 @@ async def post_init(app: Application) -> None:
 
 
 def main() -> None:
-    if not shutil.which("gh"):
-        raise SystemExit(
-            "GitHub CLI (gh) is not installed. Use the provided Dockerfile, "
-            "which installs it automatically."
-        )
+    ensure_gh_installed()
 
     settings = load_settings()
     db = Database(settings.mongo_uri, settings.mongo_db)

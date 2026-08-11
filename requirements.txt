@@ -3,3 +3,5 @@ motor~=3.7
 aiohttp~=3.11
 dnspython~=2.7
 tzdata>=2024.1
+python-dotenv>=1.0.0
+
