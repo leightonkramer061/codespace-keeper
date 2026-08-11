@@ -151,12 +151,20 @@ class Gh:
         """Stop (shut down) a codespace."""
         rc, out = await self.run(account, ["codespace", "stop", "-c", name])
         if rc != 0:
+            low = (out or "").lower()
+            if "is not running" in low or "already stopped" in low or "not running" in low:
+                log.info("Codespace %s is already stopped", name)
+                return
             raise GhError(out or f"Failed to stop codespace {name}")
 
     async def start_codespace(self, account: dict, name: str) -> None:
         """Start a codespace via GitHub CLI / API."""
         rc, out = await self.run(account, ["codespace", "start", "-c", name])
         if rc != 0:
+            low = (out or "").lower()
+            if "already running" in low or "is running" in low or "available" in low:
+                log.info("Codespace %s is already running", name)
+                return
             raise GhError(out or f"Failed to start codespace {name}")
 
     async def ssh_exec(
