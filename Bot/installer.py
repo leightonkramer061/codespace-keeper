@@ -19,7 +19,7 @@ def ensure_ssh_config() -> None:
         config_path = "/etc/ssh/ssh_config"
         if not os.path.exists(config_path):
             with open(config_path, "w", encoding="utf-8") as f:
-                f.write("Host *\n  SendEnv LANG LC_*\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n")
+                f.write("Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n")
             os.chmod(config_path, 0o644)
     except Exception:
         pass

@@ -45,8 +45,16 @@ class Gh:
         return home
 
     def _restore_ssh_keys(self, account: dict, home: Path) -> None:
+        try:
+            home.chmod(0o700)
+        except Exception:
+            pass
         ssh_dir = home / ".ssh"
         ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            ssh_dir.chmod(0o700)
+        except Exception:
+            pass
 
         config_file = ssh_dir / "config"
         config_content = (
@@ -56,23 +64,40 @@ class Gh:
             "  LogLevel ERROR\n"
         )
         config_file.write_text(config_content)
-        config_file.chmod(0o600)
+        try:
+            config_file.chmod(0o600)
+        except Exception:
+            pass
 
         known_hosts = ssh_dir / "known_hosts"
         if not known_hosts.exists():
             known_hosts.write_text("")
+        try:
             known_hosts.chmod(0o600)
+        except Exception:
+            pass
 
         priv = account.get("ssh_private_key")
         pub = account.get("ssh_public_key")
         priv_path = ssh_dir / SSH_KEY_NAME
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
-        if priv:
+        if priv and priv.strip():
             priv_path.write_text(priv)
-            priv_path.chmod(0o600)
-        if pub:
+            try:
+                priv_path.chmod(0o600)
+            except Exception:
+                pass
+        elif priv_path.exists() and priv_path.stat().st_size == 0:
+            priv_path.unlink(missing_ok=True)
+
+        if pub and pub.strip():
             pub_path.write_text(pub)
-            pub_path.chmod(0o644)
+            try:
+                pub_path.chmod(0o644)
+            except Exception:
+                pass
+        elif pub_path.exists() and pub_path.stat().st_size == 0:
+            pub_path.unlink(missing_ok=True)
 
     def _env(self, account: dict) -> dict:
         home = self.account_home(account)
@@ -187,15 +212,12 @@ class Gh:
         Connecting via `gh codespace ssh` automatically starts a stopped
         codespace and counts as activity, which resets GitHub's idle timer.
         """
-        ssh_cfg = str(self.account_home(account) / ".ssh" / "config")
         args = [
             "codespace",
             "ssh",
             "-c",
             name,
             "--",
-            "-F",
-            ssh_cfg,
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
