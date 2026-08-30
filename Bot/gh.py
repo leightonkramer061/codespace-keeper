@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 import aiohttp
@@ -81,23 +82,45 @@ class Gh:
         pub = account.get("ssh_public_key")
         priv_path = ssh_dir / SSH_KEY_NAME
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
-        if priv and priv.strip():
+
+        if priv and priv.strip() and pub and pub.strip():
             priv_path.write_text(priv)
+            pub_path.write_text(pub)
+        else:
+            if priv_path.exists() and priv_path.stat().st_size == 0:
+                priv_path.unlink(missing_ok=True)
+            if pub_path.exists() and pub_path.stat().st_size == 0:
+                pub_path.unlink(missing_ok=True)
+
+            if not priv_path.exists() or not pub_path.exists():
+                try:
+                    subprocess.run(
+                        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                    )
+                except Exception:
+                    try:
+                        subprocess.run(
+                            ["ssh-keygen", "-t", "rsa", "-b", "3072", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True,
+                        )
+                    except Exception:
+                        pass
+
+        if priv_path.exists():
             try:
                 priv_path.chmod(0o600)
             except Exception:
                 pass
-        elif priv_path.exists() and priv_path.stat().st_size == 0:
-            priv_path.unlink(missing_ok=True)
-
-        if pub and pub.strip():
-            pub_path.write_text(pub)
+        if pub_path.exists():
             try:
                 pub_path.chmod(0o644)
             except Exception:
                 pass
-        elif pub_path.exists() and pub_path.stat().st_size == 0:
-            pub_path.unlink(missing_ok=True)
 
     def _env(self, account: dict) -> dict:
         home = self.account_home(account)
@@ -116,19 +139,20 @@ class Gh:
         return env
 
     async def _persist_ssh_keys(self, account: dict) -> None:
-        """Store freshly generated SSH keys (from `gh codespace ssh`) in MongoDB."""
-        if account.get("ssh_private_key"):
+        """Store freshly generated SSH keys in MongoDB."""
+        if account.get("ssh_private_key") and account.get("ssh_public_key"):
             return
         ssh_dir = self.account_home(account) / ".ssh"
         priv_path = ssh_dir / SSH_KEY_NAME
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
-        if priv_path.exists():
-            priv = priv_path.read_text()
-            pub = pub_path.read_text() if pub_path.exists() else ""
-            await self.db.set_ssh_keys(account["_id"], priv, pub)
-            account["ssh_private_key"] = priv
-            account["ssh_public_key"] = pub
-            log.info("Stored SSH keys for account %s", account.get("login"))
+        if priv_path.exists() and pub_path.exists():
+            priv = priv_path.read_text().strip()
+            pub = pub_path.read_text().strip()
+            if priv and pub:
+                await self.db.set_ssh_keys(account["_id"], priv, pub)
+                account["ssh_private_key"] = priv
+                account["ssh_public_key"] = pub
+                log.info("Stored SSH keys for account %s", account.get("login"))
 
     # ------------------------------------------------------------------
     # gh CLI execution
