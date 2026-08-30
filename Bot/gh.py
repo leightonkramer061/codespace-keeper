@@ -122,6 +122,20 @@ class Gh:
             except Exception:
                 pass
 
+        try:
+            user_ssh = Path.home() / ".ssh"
+            user_ssh.mkdir(mode=0o700, parents=True, exist_ok=True)
+            u_priv = user_ssh / SSH_KEY_NAME
+            u_pub = user_ssh / f"{SSH_KEY_NAME}.pub"
+            if priv_path.exists() and not u_priv.exists():
+                u_priv.write_text(priv_path.read_text())
+                u_priv.chmod(0o600)
+            if pub_path.exists() and not u_pub.exists():
+                u_pub.write_text(pub_path.read_text())
+                u_pub.chmod(0o644)
+        except Exception:
+            pass
+
     def _env(self, account: dict) -> dict:
         home = self.account_home(account)
         (home / ".config" / "gh").mkdir(parents=True, exist_ok=True)
@@ -134,6 +148,7 @@ class Gh:
                 "GH_TOKEN": account["token"],
                 "GH_PROMPT_DISABLED": "1",
                 "GH_NO_UPDATE_NOTIFIER": "1",
+                "SSH_AUTH_SOCK": "",
             }
         )
         return env
@@ -236,12 +251,17 @@ class Gh:
         Connecting via `gh codespace ssh` automatically starts a stopped
         codespace and counts as activity, which resets GitHub's idle timer.
         """
+        home = self.account_home(account)
+        self._restore_ssh_keys(account, home)
+        priv_key = str(home / ".ssh" / SSH_KEY_NAME)
         args = [
             "codespace",
             "ssh",
             "-c",
             name,
             "--",
+            "-i",
+            priv_key,
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
@@ -250,7 +270,9 @@ class Gh:
             "LogLevel=ERROR",
             f"bash -lc {shlex.quote(command)}",
         ]
-        return await self.run(account, args, timeout=timeout)
+        rc, out = await self.run(account, args, timeout=timeout)
+        await self._persist_ssh_keys(account)
+        return rc, out
 
     # ------------------------------------------------------------------
     # Authentication helpers
