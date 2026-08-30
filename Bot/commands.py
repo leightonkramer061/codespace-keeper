@@ -31,6 +31,7 @@ HELP_TEXT = (
     "/remove_codespace &lt;alias&gt; &lt;name&gt; — untrack\n\n"
     "<b>Startup commands</b>\n"
     "/set_startup &lt;alias&gt; &lt;name&gt; &lt;cmd1;cmd2&gt; — sh command(s), auto-run on every start\n"
+    "/run_startup &lt;alias&gt; &lt;name&gt; — execute startup commands immediately\n"
     "/set_dir &lt;alias&gt; &lt;name&gt; &lt;dir&gt; — directory to cd into first (e.g. ~/mydirectory)\n"
     "/clear_startup &lt;alias&gt; &lt;name&gt; — clear directory + commands\n\n"
     "<b>Keep-alive</b>\n"
@@ -367,6 +368,42 @@ async def cmd_clear_startup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.set_startup_commands(cs["_id"], [])
     await db.set_startup_dir(cs["_id"], None)
     await _send(update, f"\U0001f9f9 Startup directory + commands cleared for <code>{html.escape(cs['name'])}</code>.")
+
+
+async def cmd_run_startup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings, db, gh, keeper = _ctx(context)
+    if not await _guard(update, settings):
+        return
+    args = context.args or []
+    if len(args) != 2:
+        await _send(update, "Usage: <code>/run_startup &lt;alias&gt; &lt;name&gt;</code>")
+        return
+    account = await _find_account(db, update, args[0])
+    if not account:
+        return
+    cs = await _ensure_tracked(update, db, gh, account, args[1])
+    if not cs:
+        return
+    cmds = cs.get("startup_commands") or []
+    if not cmds:
+        await _send(
+            update,
+            f"\u26a0\ufe0f No startup commands configured for <code>{html.escape(cs['name'])}</code>.\n"
+            "Use <code>/set_startup</code> to set commands first.",
+        )
+        return
+    await _send(
+        update,
+        f"\u2699\ufe0f Running {len(cmds)} startup command(s) on <code>{html.escape(cs['name'])}</code>\u2026",
+    )
+    await keeper.run_startup_commands(cs["_id"], reason="manual command", force=True)
+    refreshed = await db.get_codespace(cs["_id"])
+    last_status = (refreshed.get("last_status") or "") if refreshed else ""
+    await _send(
+        update,
+        f"\u2705 Finished running startup commands for <code>{html.escape(cs['name'])}</code>.\n"
+        f"<b>Result:</b> <code>{html.escape(last_status)}</code>",
+    )
 
 
 # ----------------------------------------------------------------------
@@ -809,6 +846,7 @@ def register(app: Application) -> None:
     app.add_handler(CommandHandler("series_schedule", cmd_series_schedule))
     app.add_handler(CommandHandler("series_unschedule", cmd_series_unschedule))
     app.add_handler(CommandHandler("clear_startup", cmd_clear_startup))
+    app.add_handler(CommandHandler("run_startup", cmd_run_startup))
     app.add_handler(CommandHandler("keep", cmd_keep))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("keep_all", cmd_keep_all))

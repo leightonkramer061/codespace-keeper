@@ -44,6 +44,7 @@ async def post_init(app: Application) -> None:
             BotCommand("add_codespace", "<alias> <name> track codespace"),
             BotCommand("remove_codespace", "<alias> <name> untrack"),
             BotCommand("set_startup", "<alias> <name> <cmd1;cmd2>"),
+            BotCommand("run_startup", "<alias> <name> run commands now"),
             BotCommand("set_dir", "<alias> <name> <directory>"),
             BotCommand("schedule", "<alias> <name> <stop> <start> IST"),
             BotCommand("unschedule", "<alias> <name> remove schedule"),

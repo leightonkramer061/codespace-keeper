@@ -96,6 +96,7 @@ class Database:
                 },
                 "$setOnInsert": {
                     "startup_commands": [],
+                    "startup_done": False,
                     "keepalive": False,
                     "last_ping": None,
                     "last_status": "",
@@ -179,7 +180,13 @@ class Database:
 
     async def set_startup_commands(self, cs_id: Any, commands: list[str]) -> None:
         await self.codespaces.update_one(
-            {"_id": oid(cs_id)}, {"$set": {"startup_commands": commands}}
+            {"_id": oid(cs_id)},
+            {"$set": {"startup_commands": commands, "startup_done": False}},
+        )
+
+    async def set_startup_done(self, cs_id: Any, done: bool) -> None:
+        await self.codespaces.update_one(
+            {"_id": oid(cs_id)}, {"$set": {"startup_done": done}}
         )
 
     async def record_ping(self, cs_id: Any, ok: bool, detail: str) -> None:

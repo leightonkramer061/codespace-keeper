@@ -532,23 +532,50 @@ async def cb_cscmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cs = await db.get_codespace(cs_id)
     if not cs:
         return
-    workdir = cs.get("startup_dir") or "(none \u2014 home directory)"
-    current = "\n".join(cs.get("startup_commands") or []) or "(none)"
+    workdir = cs.get("startup_dir") or "(auto repo workspace)"
+    cmds = cs.get("startup_commands") or []
+    current = "\n".join(cmds) or "(none)"
     text = (
         f"\u2699\ufe0f <b>Startup setup — {html.escape(cs['display_name'])}</b>\n\n"
-        "These run inside the codespace every time it starts.\n\n"
+        "These run inside the codespace every time it starts (Python environments and virtualenvs are auto-detected).\n\n"
         f"\U0001f4c2 <b>1. Directory (cd \u2026):</b>\n<pre>{html.escape(workdir)}</pre>\n"
         f"\u26a1 <b>2. Sh command(s):</b>\n<pre>{html.escape(current)}</pre>\n\n"
-        "Set the directory first (like <code>~</code> or <code>~/mydirectory</code>), "
-        "then the sh command(s) that run there."
+        "Set the directory first (like <code>/workspaces/myrepo</code> or <code>~</code>), "
+        "then the command(s) that run there."
     )
-    keyboard = [
+    keyboard = []
+    if cmds:
+        keyboard.append([InlineKeyboardButton("\u25b6\ufe0f Run startup commands now", callback_data=f"csruncmds:{cs_id}")])
+    keyboard.extend([
         [InlineKeyboardButton("\U0001f4c2 1. Set directory (cd \u2026)", callback_data=f"csdir:{cs_id}")],
         [InlineKeyboardButton("\u26a1 2. Set sh command(s)", callback_data=f"cssh:{cs_id}")],
         [InlineKeyboardButton("\U0001f9f9 Clear all", callback_data=f"cscmdclear:{cs_id}")],
         [InlineKeyboardButton("\u2b05\ufe0f Back", callback_data=f"cs:{cs_id}")],
-    ]
+    ])
     await _render(update, text, keyboard)
+
+
+async def cb_csruncmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings, db, gh, keeper = _ctx(context)
+    if not await _guard(update, settings):
+        return
+    cs_id = _arg(update)
+    cs = await db.get_codespace(cs_id)
+    if not cs:
+        return
+    cmds = cs.get("startup_commands") or []
+    if not cmds:
+        try:
+            await update.callback_query.answer("No startup commands configured", show_alert=True)
+        except BadRequest:
+            pass
+        return
+    try:
+        await update.callback_query.answer("Running startup commands\u2026")
+    except BadRequest:
+        pass
+    await keeper.run_startup_commands(cs_id, reason="manual trigger", force=True)
+    await _show_cs(update, context, cs_id, live=True)
 
 
 async def cb_csdir(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1120,6 +1147,7 @@ def register(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_csstart, pattern=r"^csstart:"))
     app.add_handler(CallbackQueryHandler(cb_csstop, pattern=r"^csstop:"))
     app.add_handler(CallbackQueryHandler(cb_cscmds, pattern=r"^cscmds:"))
+    app.add_handler(CallbackQueryHandler(cb_csruncmds, pattern=r"^csruncmds:"))
     app.add_handler(CallbackQueryHandler(cb_cscmdclear, pattern=r"^cscmdclear:"))
     app.add_handler(CallbackQueryHandler(cb_cssched, pattern=r"^cssched:"))
     app.add_handler(CallbackQueryHandler(cb_csschedclear, pattern=r"^csschedclear:"))

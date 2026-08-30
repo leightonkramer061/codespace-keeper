@@ -118,6 +118,7 @@ can be addressed by their GitHub login.
 | Command | Description |
 | --- | --- |
 | `/set_startup <alias> <name> <cmd1;cmd2>` | Sh command(s) that auto-run every time the codespace starts, `;`-separated |
+| `/run_startup <alias> <name>` | Manually run startup command(s) immediately |
 | `/set_dir <alias> <name> <dir>` | Directory to `cd` into before the commands (e.g. `~/mydirectory`) |
 | `/clear_startup <alias> <name>` | Clear directory + commands |
 

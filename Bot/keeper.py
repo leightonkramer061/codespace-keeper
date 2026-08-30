@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,71 @@ RATE_LIMIT_MARKERS = (
 def _is_rate_limited(text: str) -> bool:
     t = (text or "").lower()
     return any(marker in t for marker in RATE_LIMIT_MARKERS)
+
+
+def build_startup_command(cmd: str, workdir: str | None = None) -> str:
+    """Wrap command for reliable execution inside Codespace Python/Linux environments.
+    
+    Handles:
+    1. Sourcing login/profile scripts and user .bashrc for environment variables.
+    2. Adding common Python paths (~/.local/bin, /usr/local/python/..., conda) to PATH.
+    3. Changing to the configured directory or auto-detecting the repo in /workspaces.
+    4. Auto-activating Python virtual environments (.venv, venv, env) if present.
+    5. Aliasing python -> python3 if python binary is missing.
+    6. Properly detaching background processes (& or nohup) with output redirected
+       to /tmp/codespace_startup.log so SSH sessions never hang or get killed.
+    """
+    clean_cmd = cmd.strip()
+    is_bg = clean_cmd.endswith("&")
+    if is_bg:
+        clean_cmd = clean_cmd[:-1].strip()
+
+    script_parts = [
+        "#!/usr/bin/env bash",
+        "[ -f /etc/profile ] && . /etc/profile >/dev/null 2>&1 || true",
+        "[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true",
+        "[ -f ~/.bashrc ] && . ~/.bashrc >/dev/null 2>&1 || true",
+        'export PATH="$HOME/.local/bin:$HOME/.python/current/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/opt/conda/bin:$PATH"',
+    ]
+    if workdir:
+        script_parts.append(f'cd {shlex.quote(workdir)} 2>/dev/null || cd ~')
+    else:
+        script_parts.append(
+            'if [ -d "/workspaces" ]; then\n'
+            '    for _d in /workspaces/*; do\n'
+            '        if [ -d "$_d" ]; then\n'
+            '            cd "$_d"\n'
+            '            break\n'
+            '        fi\n'
+            '    done\n'
+            'fi'
+        )
+
+    script_parts.append(
+        'if [ -z "$VIRTUAL_ENV" ]; then\n'
+        '    if [ -f ".venv/bin/activate" ]; then\n'
+        '        . .venv/bin/activate\n'
+        '    elif [ -f "venv/bin/activate" ]; then\n'
+        '        . venv/bin/activate\n'
+        '    elif [ -f "env/bin/activate" ]; then\n'
+        '        . env/bin/activate\n'
+        '    fi\n'
+        'fi\n'
+        'if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then\n'
+        '    python() { python3 "$@"; }\n'
+        '    export -f python 2>/dev/null || true\n'
+        'fi'
+    )
+
+    if is_bg:
+        nohup_cmd = clean_cmd if clean_cmd.startswith("nohup ") else f"nohup {clean_cmd}"
+        script_parts.append(
+            f'mkdir -p /tmp && ( {nohup_cmd} </dev/null >>/tmp/codespace_startup.log 2>&1 & ) && disown -a 2>/dev/null || true'
+        )
+    else:
+        script_parts.append(clean_cmd)
+
+    return "\n".join(script_parts)
 
 
 class KeeperManager:
@@ -91,6 +157,7 @@ class KeeperManager:
         """Stop the keep-alive AND shut the codespace itself down on GitHub."""
         key = str(cs_id)
         await self.stop(key)
+        await self.db.set_startup_done(key, False)
         cs = await self.db.get_codespace(key)
         account = await self.db.get_account(cs["account_id"]) if cs else None
         if not cs or not account:
@@ -211,6 +278,7 @@ class KeeperManager:
                 try:
                     await self.gh.stop_codespace(account, cs["name"])
                     await self.db.set_state(str(cs["_id"]), "Shutdown")
+                    await self.db.set_startup_done(str(cs["_id"]), False)
                     await self.db.record_ping(
                         str(cs["_id"]), True, "series stopped"
                     )
@@ -263,7 +331,8 @@ class KeeperManager:
                     rc, out = 1, str(exc)
                 if rc == 0:
                     await self.db.record_ping(active, True, "series ping ok")
-                    if prev != "Available":
+                    refreshed = await self.db.get_codespace(active)
+                    if refreshed and (not refreshed.get("startup_done") or prev != "Available"):
                         await self.run_startup_commands(
                             active, reason="series start"
                         )
@@ -282,6 +351,7 @@ class KeeperManager:
                     try:
                         await self.gh.stop_codespace(account, name)
                         await self.db.set_state(active, "Shutdown")
+                        await self.db.set_startup_done(active, False)
                     except Exception:  # noqa: BLE001
                         log.exception(
                             "Series: failed to stop rate-limited %s", name
@@ -383,6 +453,7 @@ class KeeperManager:
         try:
             await self.gh.stop_codespace(account, name)
             await self.db.set_state(key, "Shutdown")
+            await self.db.set_startup_done(key, False)
             await self.db.record_ping(key, True, "scheduled stop")
             log.info("Scheduled stop done for %s", name)
         except Exception as exc:  # noqa: BLE001
@@ -411,7 +482,8 @@ class KeeperManager:
             if rc != 0:
                 raise RuntimeError((out or "ssh failed")[-300:])
             await self.db.record_ping(key, True, "scheduled start")
-            await self.run_startup_commands(key, reason="scheduled start")
+            await self.db.set_state(key, "Available")
+            await self.run_startup_commands(key, reason="scheduled start", force=True)
             log.info("Scheduled start done for %s", name)
         except Exception as exc:  # noqa: BLE001
             await self.db.record_ping(
@@ -429,10 +501,10 @@ class KeeperManager:
     async def run_startup_commands(self, cs_id, *, reason: str, force: bool = False) -> None:
         """Run the codespace's startup commands once per 'up' session.
 
-        The stored `state` field acts as the session marker: once the
-        commands ran, state is persisted as "Available"; any caller that
-        arrives later for the same session sees that and skips. Works
-        across bot restarts because the marker lives in MongoDB.
+        The `startup_done` field acts as the session marker: once the
+        commands ran, it is persisted as True; any caller that arrives later
+        for the same session sees that and skips. Works across bot restarts
+        because the marker lives in MongoDB.
         """
         key = str(cs_id)
         lock = self._startup_locks.setdefault(key, asyncio.Lock())
@@ -440,14 +512,14 @@ class KeeperManager:
             cs = await self.db.get_codespace(key)
             if not cs:
                 return
-            if not force and cs.get("state") == "Available":
+            if not force and cs.get("startup_done"):
                 return  # already handled for this session
             account = await self.db.get_account(cs["account_id"])
             if not account:
                 return
             cmds = cs.get("startup_commands") or []
             if not cmds:
-                await self.db.set_state(key, "Available")
+                await self.db.set_startup_done(key, True)
                 return
             name = cs["name"]
             workdir = (cs.get("startup_dir") or "").strip()
@@ -456,11 +528,11 @@ class KeeperManager:
                 len(cmds),
                 name,
                 reason,
-                f" in {workdir}" if workdir else "",
+                f" in {workdir}" if workdir else " (auto workspace)",
             )
             ok = 0
             for cmd in cmds:
-                full_cmd = f"cd {workdir} && {cmd}" if workdir else cmd
+                full_cmd = build_startup_command(cmd, workdir=workdir if workdir else None)
                 rc, out = await self.gh.ssh_exec(account, name, full_cmd, timeout=600)
                 if rc == 0:
                     ok += 1
@@ -471,6 +543,7 @@ class KeeperManager:
                         cmd,
                         (out or "")[-200:],
                     )
+            await self.db.set_startup_done(key, True)
             await self.db.set_state(key, "Available")
             await self.db.record_ping(
                 key,
@@ -499,17 +572,24 @@ class KeeperManager:
                         except Exception:  # noqa: BLE001
                             continue
                         if state == "Available":
-                            if prev != "Available":
+                            if not cs.get("startup_done") or prev != "Available":
                                 log.info(
-                                    "Detected start of %s (was: %s)",
+                                    "Detected start of %s (was: %s, startup_done: %s)",
                                     cs["name"],
                                     prev or "unknown",
+                                    cs.get("startup_done"),
                                 )
+                                await self.db.set_state(key, "Available")
                                 await self.run_startup_commands(
                                     key, reason="start detected"
                                 )
-                        elif state != prev:
-                            await self.db.set_state(key, state)
+                            elif state != prev:
+                                await self.db.set_state(key, state)
+                        else:
+                            if state != prev:
+                                await self.db.set_state(key, state)
+                            if state in ("Shutdown", "Stopped"):
+                                await self.db.set_startup_done(key, False)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - keep the watcher alive
@@ -539,6 +619,8 @@ class KeeperManager:
                     state = await self.gh.get_codespace_state(account, name)
                     if state != prev:
                         await self.db.set_state(cs_id, state)
+                        if state in ("Shutdown", "Stopped"):
+                            await self.db.set_startup_done(cs_id, False)
                 except Exception:  # noqa: BLE001
                     state = "Unknown"
 
@@ -554,10 +636,9 @@ class KeeperManager:
                 if rc == 0:
                     failures = 0
                     await self.db.record_ping(cs_id, True, "ping ok")
-                    if state != "Available" or prev != "Available":
-                        # This SSH connect booted the codespace (or it just
-                        # came up) -> make sure startup commands run. The
-                        # shared guard prevents double-runs with the watcher.
+                    refreshed = await self.db.get_codespace(cs_id)
+                    if refreshed and (not refreshed.get("startup_done") or state != "Available" or prev != "Available"):
+                        # Make sure startup commands run. The shared lock prevents double-runs.
                         await self.run_startup_commands(
                             cs_id, reason="keep-alive connect"
                         )
@@ -575,6 +656,11 @@ class KeeperManager:
                     if api_ok:
                         failures = 0
                         await self.db.record_ping(cs_id, True, "ping ok (API start)")
+                        refreshed = await self.db.get_codespace(cs_id)
+                        if refreshed and not refreshed.get("startup_done"):
+                            await self.run_startup_commands(
+                                cs_id, reason="api start"
+                            )
                     else:
                         failures += 1
                         await self.db.record_ping(cs_id, False, (out or "ssh failed")[-400:])
