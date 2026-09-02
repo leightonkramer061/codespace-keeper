@@ -84,8 +84,10 @@ class Gh:
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
 
         if priv and priv.strip() and pub and pub.strip():
-            priv_path.write_text(priv)
-            pub_path.write_text(pub)
+            clean_priv = priv.strip().replace("\r\n", "\n") + "\n"
+            clean_pub = pub.strip().replace("\r\n", "\n") + "\n"
+            priv_path.write_text(clean_priv, encoding="utf-8")
+            pub_path.write_text(clean_pub, encoding="utf-8")
         else:
             if priv_path.exists() and priv_path.stat().st_size == 0:
                 priv_path.unlink(missing_ok=True)
@@ -99,11 +101,17 @@ class Gh:
                     from cryptography.hazmat.primitives import serialization
 
                     k = crypto_ed25519.Ed25519PrivateKey.generate()
-                    priv_str = k.private_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PrivateFormat.OpenSSH,
-                        encryption_algorithm=serialization.NoEncryption(),
-                    ).decode("utf-8")
+                    priv_str = (
+                        k.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.OpenSSH,
+                            encryption_algorithm=serialization.NoEncryption(),
+                        )
+                        .decode("utf-8")
+                        .strip()
+                        .replace("\r\n", "\n")
+                        + "\n"
+                    )
                     pub_str = (
                         k.public_key()
                         .public_bytes(
@@ -111,10 +119,12 @@ class Gh:
                             format=serialization.PublicFormat.OpenSSH,
                         )
                         .decode("utf-8")
+                        .strip()
+                        .replace("\r\n", "\n")
                         + " codespace-keeper\n"
                     )
-                    priv_path.write_text(priv_str)
-                    pub_path.write_text(pub_str)
+                    priv_path.write_text(priv_str, encoding="utf-8")
+                    pub_path.write_text(pub_str, encoding="utf-8")
                     generated = True
                 except Exception:
                     pass
@@ -146,11 +156,16 @@ class Gh:
 
         if priv_path.exists():
             try:
+                # Ensure trailing newline on disk
+                txt = priv_path.read_text(encoding="utf-8").strip().replace("\r\n", "\n") + "\n"
+                priv_path.write_text(txt, encoding="utf-8")
                 priv_path.chmod(0o600)
             except Exception:
                 pass
         if pub_path.exists():
             try:
+                ptxt = pub_path.read_text(encoding="utf-8").strip().replace("\r\n", "\n") + "\n"
+                pub_path.write_text(ptxt, encoding="utf-8")
                 pub_path.chmod(0o644)
             except Exception:
                 pass
@@ -162,11 +177,11 @@ class Gh:
                 t_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 u_priv = t_dir / SSH_KEY_NAME
                 u_pub = t_dir / f"{SSH_KEY_NAME}.pub"
-                if priv_path.exists() and not u_priv.exists():
-                    u_priv.write_text(priv_path.read_text())
+                if priv_path.exists():
+                    u_priv.write_text(priv_path.read_text(encoding="utf-8").strip() + "\n", encoding="utf-8")
                     u_priv.chmod(0o600)
-                if pub_path.exists() and not u_pub.exists():
-                    u_pub.write_text(pub_path.read_text())
+                if pub_path.exists():
+                    u_pub.write_text(pub_path.read_text(encoding="utf-8").strip() + "\n", encoding="utf-8")
                     u_pub.chmod(0o644)
             except Exception:
                 pass
@@ -209,8 +224,8 @@ class Gh:
         priv_path = ssh_dir / SSH_KEY_NAME
         pub_path = ssh_dir / f"{SSH_KEY_NAME}.pub"
         if priv_path.exists() and pub_path.exists():
-            priv = priv_path.read_text().strip()
-            pub = pub_path.read_text().strip()
+            priv = priv_path.read_text(encoding="utf-8").strip().replace("\r\n", "\n") + "\n"
+            pub = pub_path.read_text(encoding="utf-8").strip().replace("\r\n", "\n") + "\n"
             if priv and pub:
                 await self.db.set_ssh_keys(account["_id"], priv, pub)
                 account["ssh_private_key"] = priv
