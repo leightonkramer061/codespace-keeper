@@ -93,23 +93,56 @@ class Gh:
                 pub_path.unlink(missing_ok=True)
 
             if not priv_path.exists() or not pub_path.exists():
+                generated = False
                 try:
-                    subprocess.run(
-                        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=True,
+                    from cryptography.hazmat.primitives.asymmetric import ed25519 as crypto_ed25519
+                    from cryptography.hazmat.primitives import serialization
+
+                    k = crypto_ed25519.Ed25519PrivateKey.generate()
+                    priv_str = k.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.OpenSSH,
+                        encryption_algorithm=serialization.NoEncryption(),
+                    ).decode("utf-8")
+                    pub_str = (
+                        k.public_key()
+                        .public_bytes(
+                            encoding=serialization.Encoding.OpenSSH,
+                            format=serialization.PublicFormat.OpenSSH,
+                        )
+                        .decode("utf-8")
+                        + " codespace-keeper\n"
                     )
+                    priv_path.write_text(priv_str)
+                    pub_path.write_text(pub_str)
+                    generated = True
                 except Exception:
+                    pass
+
+                if not generated:
+                    keygen_env = dict(os.environ)
+                    uid = os.getuid()
+                    keygen_env.setdefault("USER", f"user{uid}")
+                    keygen_env.setdefault("LOGNAME", f"user{uid}")
                     try:
                         subprocess.run(
-                            ["ssh-keygen", "-t", "rsa", "-b", "3072", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
+                            ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             check=True,
+                            env=keygen_env,
                         )
                     except Exception:
-                        pass
+                        try:
+                            subprocess.run(
+                                ["ssh-keygen", "-t", "rsa", "-b", "3072", "-N", "", "-C", "codespace-keeper", "-f", str(priv_path)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=True,
+                                env=keygen_env,
+                            )
+                        except Exception:
+                            pass
 
         if priv_path.exists():
             try:
@@ -122,25 +155,29 @@ class Gh:
             except Exception:
                 pass
 
-        try:
-            user_ssh = Path.home() / ".ssh"
-            user_ssh.mkdir(mode=0o700, parents=True, exist_ok=True)
-            u_priv = user_ssh / SSH_KEY_NAME
-            u_pub = user_ssh / f"{SSH_KEY_NAME}.pub"
-            if priv_path.exists() and not u_priv.exists():
-                u_priv.write_text(priv_path.read_text())
-                u_priv.chmod(0o600)
-            if pub_path.exists() and not u_pub.exists():
-                u_pub.write_text(pub_path.read_text())
-                u_pub.chmod(0o644)
-        except Exception:
-            pass
+        # Sync keys to system user home and /tmp so gh and ssh find them anywhere
+        sync_targets = [Path.home() / ".ssh", Path("/tmp/.ssh")]
+        for t_dir in sync_targets:
+            try:
+                t_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                u_priv = t_dir / SSH_KEY_NAME
+                u_pub = t_dir / f"{SSH_KEY_NAME}.pub"
+                if priv_path.exists() and not u_priv.exists():
+                    u_priv.write_text(priv_path.read_text())
+                    u_priv.chmod(0o600)
+                if pub_path.exists() and not u_pub.exists():
+                    u_pub.write_text(pub_path.read_text())
+                    u_pub.chmod(0o644)
+            except Exception:
+                pass
 
     def _env(self, account: dict) -> dict:
         home = self.account_home(account)
         (home / ".config" / "gh").mkdir(parents=True, exist_ok=True)
         self._restore_ssh_keys(account, home)
         env = dict(os.environ)
+        uid = os.getuid()
+        uname = env.get("USER") or env.get("LOGNAME") or f"user{uid}"
         env.update(
             {
                 "HOME": str(home),
@@ -149,6 +186,8 @@ class Gh:
                 "GH_PROMPT_DISABLED": "1",
                 "GH_NO_UPDATE_NOTIFIER": "1",
                 "SSH_AUTH_SOCK": "",
+                "USER": uname,
+                "LOGNAME": uname,
             }
         )
         return env

@@ -12,8 +12,28 @@ import urllib.request
 log = logging.getLogger("codespace-keeper")
 
 
+def ensure_user_in_passwd() -> None:
+    """Ensure current UID exists in /etc/passwd so ssh and ssh-keygen can resolve the user."""
+    try:
+        import pwd
+        uid = os.getuid()
+        try:
+            pwd.getpwuid(uid)
+        except KeyError:
+            uname = os.environ.get("USER") or os.environ.get("LOGNAME") or f"user{uid}"
+            entry = f"{uname}:x:{uid}:{os.getgid()}:{uname}:/tmp:/bin/bash\n"
+            try:
+                with open("/etc/passwd", "a", encoding="utf-8") as f:
+                    f.write(entry)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def ensure_ssh_config() -> None:
     """Ensure system /etc/ssh/ssh_config exists if directory is writable."""
+    ensure_user_in_passwd()
     try:
         os.makedirs("/etc/ssh", exist_ok=True)
         config_path = "/etc/ssh/ssh_config"
@@ -30,6 +50,7 @@ def ensure_gh_installed() -> str:
     
     If not installed on the system, downloads the official static binary into ./bin/gh.
     """
+    ensure_user_in_passwd()
     ensure_ssh_config()
     # 1. Check if gh is already on PATH
     gh_path = shutil.which("gh")
