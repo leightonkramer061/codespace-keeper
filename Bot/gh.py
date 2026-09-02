@@ -260,6 +260,8 @@ class Gh:
             "-c",
             name,
             "--",
+            "-F",
+            "/dev/null",
             "-i",
             priv_key,
             "-o",
@@ -268,7 +270,9 @@ class Gh:
             "UserKnownHostsFile=/dev/null",
             "-o",
             "LogLevel=ERROR",
-            f"bash -lc {shlex.quote(command)}",
+            "bash",
+            "-lc",
+            command,
         ]
         rc, out = await self.run(account, args, timeout=timeout)
         await self._persist_ssh_keys(account)

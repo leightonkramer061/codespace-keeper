@@ -324,15 +324,15 @@ class KeeperManager:
                     if rc != 0 and not _is_rate_limited(out):
                         try:
                             await self.gh.start_codespace(account, name)
-                            rc, out = 0, "api start fallback"
                         except Exception:
                             pass
                 except Exception as exc:  # noqa: BLE001 - includes GhError
                     rc, out = 1, str(exc)
                 if rc == 0:
                     await self.db.record_ping(active, True, "series ping ok")
+                    await self.db.set_state(active, "Available")
                     refreshed = await self.db.get_codespace(active)
-                    if refreshed and (not refreshed.get("startup_done") or prev != "Available"):
+                    if refreshed and not refreshed.get("startup_done"):
                         await self.run_startup_commands(
                             active, reason="series start"
                         )
@@ -604,6 +604,7 @@ class KeeperManager:
         interval = self.settings.keepalive_interval
         failures = 0
         while True:
+            delay = interval
             try:
                 cs = await self.db.get_codespace(cs_id)
                 if not cs or not cs.get("keepalive"):
@@ -617,18 +618,29 @@ class KeeperManager:
                 prev = cs.get("state")
                 try:
                     state = await self.gh.get_codespace_state(account, name)
-                    if state != prev:
-                        await self.db.set_state(cs_id, state)
-                        if state in ("Shutdown", "Stopped"):
-                            await self.db.set_startup_done(cs_id, False)
                 except Exception:  # noqa: BLE001
                     state = "Unknown"
 
-                # If codespace is Shutdown or Stopped, boot it via GitHub REST API
-                if state in ("Shutdown", "Stopped"):
+                if state != prev and state != "Unknown":
+                    await self.db.set_state(cs_id, state)
+                    if state in ("Shutdown", "Stopped"):
+                        await self.db.set_startup_done(cs_id, False)
+
+                # If codespace is Shutdown or Stopped, boot it via GitHub REST API and wait for it
+                if state in ("Shutdown", "Stopped", "Starting"):
                     try:
                         log.info("Codespace %s is %s. Booting via GitHub API...", name, state)
                         await self.gh.start_codespace(account, name)
+                        # Wait up to 45s for state to become Available
+                        for _ in range(9):
+                            await asyncio.sleep(5)
+                            try:
+                                state = await self.gh.get_codespace_state(account, name)
+                                if state == "Available":
+                                    await self.db.set_state(cs_id, "Available")
+                                    break
+                            except Exception:
+                                pass
                     except Exception as boot_err:
                         log.warning("Could not boot %s via API: %s", name, boot_err)
 
@@ -636,35 +648,22 @@ class KeeperManager:
                 if rc == 0:
                     failures = 0
                     await self.db.record_ping(cs_id, True, "ping ok")
+                    await self.db.set_state(cs_id, "Available")
                     refreshed = await self.db.get_codespace(cs_id)
-                    if refreshed and (not refreshed.get("startup_done") or state != "Available" or prev != "Available"):
-                        # Make sure startup commands run. The shared lock prevents double-runs.
+                    if refreshed and not refreshed.get("startup_done"):
                         await self.run_startup_commands(
                             cs_id, reason="keep-alive connect"
                         )
+                    delay = interval
                 else:
-                    api_ok = False
+                    failures += 1
+                    await self.db.record_ping(cs_id, False, f"SSH ping failed: {(out or '')[-300:]}")
+                    log.warning("Keep-alive ping failed for %s (attempt %d): %s", name, failures, (out or "")[-200:])
                     try:
                         await self.gh.start_codespace(account, name)
-                        new_state = await self.gh.get_codespace_state(account, name)
-                        if new_state in ("Available", "Starting"):
-                            api_ok = True
-                            state = new_state
-                    except Exception as boot_err:
-                        out = f"SSH: {out} | API: {boot_err}"
-
-                    if api_ok:
-                        failures = 0
-                        await self.db.record_ping(cs_id, True, "ping ok (API start)")
-                        refreshed = await self.db.get_codespace(cs_id)
-                        if refreshed and not refreshed.get("startup_done"):
-                            await self.run_startup_commands(
-                                cs_id, reason="api start"
-                            )
-                    else:
-                        failures += 1
-                        await self.db.record_ping(cs_id, False, (out or "ssh failed")[-400:])
-                        log.warning("Keep-alive ping failed for %s: %s", name, (out or "")[-200:])
+                    except Exception:
+                        pass
+                    delay = min(15 * failures, 60)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep the loop alive
@@ -674,8 +673,6 @@ class KeeperManager:
                     await self.db.record_ping(cs_id, False, str(exc)[:400])
                 except Exception:  # noqa: BLE001
                     pass
+                delay = min(15 * failures, 60)
 
-            # Back off a little on repeated failures, otherwise ping every
-            # `interval` seconds (default 300s = 5 minutes).
-            delay = interval if failures == 0 else min(interval, 60 * min(failures, 5))
             await asyncio.sleep(delay)
