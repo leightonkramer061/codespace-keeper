@@ -31,9 +31,33 @@ def ensure_user_in_passwd() -> None:
         pass
 
 
+def ensure_fake_getpwuid() -> str | None:
+    """Ensure libfake_getpwuid.so exists to intercept missing container UID in /etc/passwd."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    so_path = os.path.join(base_dir, "libfake_getpwuid.so")
+    c_path = os.path.join(base_dir, "libfake_getpwuid.c")
+    if os.path.exists(so_path):
+        return so_path
+    if os.path.exists(c_path):
+        try:
+            import subprocess
+            subprocess.run(
+                ["gcc", "-shared", "-fPIC", "-O2", "-o", so_path, c_path, "-ldl"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            if os.path.exists(so_path):
+                return so_path
+        except Exception:
+            pass
+    return None
+
+
 def ensure_ssh_config() -> None:
     """Ensure system /etc/ssh/ssh_config exists if directory is writable."""
     ensure_user_in_passwd()
+    ensure_fake_getpwuid()
     try:
         os.makedirs("/etc/ssh", exist_ok=True)
         config_path = "/etc/ssh/ssh_config"
@@ -51,6 +75,7 @@ def ensure_gh_installed() -> str:
     If not installed on the system, downloads the official static binary into ./bin/gh.
     """
     ensure_user_in_passwd()
+    ensure_fake_getpwuid()
     ensure_ssh_config()
     # 1. Check if gh is already on PATH
     gh_path = shutil.which("gh")

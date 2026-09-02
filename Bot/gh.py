@@ -178,6 +178,13 @@ class Gh:
         env = dict(os.environ)
         uid = os.getuid()
         uname = env.get("USER") or env.get("LOGNAME") or f"user{uid}"
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        so_path = os.path.join(base_dir, "libfake_getpwuid.so")
+        ld_preload = env.get("LD_PRELOAD", "")
+        if os.path.exists(so_path) and so_path not in ld_preload:
+            ld_preload = f"{so_path} {ld_preload}".strip()
+
         env.update(
             {
                 "HOME": str(home),
@@ -188,6 +195,8 @@ class Gh:
                 "SSH_AUTH_SOCK": "",
                 "USER": uname,
                 "LOGNAME": uname,
+                "USERNAME": uname,
+                "LD_PRELOAD": ld_preload,
             }
         )
         return env
